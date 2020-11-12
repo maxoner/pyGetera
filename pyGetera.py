@@ -65,21 +65,26 @@ class GeteraInterface:
             и записывает по ним в файл данные из переменной data
             """
             with open(self.getera_path + self.input_file,'r') as f:
-                file = f.readlines()
+                filee = f.read()
             regex_input = re.compile(regexp)
             k = 0
-            for i in regex_input.findall(file):
-                line = file.find(i)+len(i)
-                j = 0
-                prev = ''
-                while(file[line+j] != ','):
-                    prev += file[line+j]
-                    j+=1
-                a = '%.03e'%data[k]
-                file = file.replace(i+prev,i+a)
-                k+=1
-            with open(self.getera_path + self.input_file,'w') as f:
-                f.write(file)
+            entries = regex_input.findall(filee)
+            for i in entries:
+                start_index = filee.find(i)+len(i)
+                stop_index = filee[start_index:].find(',') + start_index
+                #print(f'start:{start_index}, stop:{stop_index}')
+                sliced_string = filee[start_index:stop_index]
+                print(sliced_string)
+                row = re.split(r',\s*', sliced_string)
+                print(row)
+                for j in range(len(row)-1):
+                    row[j] = '%.03e'%data[k+j]
+                k += len(row)
+                filee = filee.replace(sliced_string, ', '.join(row))
+                print(', '.join(row))
+            print(filee)
+            #with open(self.getera_path + self.input_file,'w') as f:
+            #    f.write(filee)
 
         def gen_regexp(strings:str) -> str:
             """
@@ -102,7 +107,7 @@ class GeteraInterface:
                     first.append(i) 
                     flag = True
             ll = ''
-            reg_exp = f' *[@ ] *\*?[{ ll.join(first) }][{ ll.join(second) }]?\d*\*? *[@=] *' 
+            reg_exp = f' *[@ ] *\*?[{ ll.join(first) }][{ ll.join(second) }]?\d*\*? *[@=] *\s*' 
             if len(second) == 0:
                 reg_exp = reg_exp.replace('[]?','')
             #tail = '\D{1,4}\(?\d?\D?\d?\)?\*? *[@=] *'
