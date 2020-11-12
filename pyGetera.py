@@ -8,11 +8,11 @@ import re
 import pandas as pd 
 
 
-class Table(pd.DataFrame):
-    def __init__(self,data):
-        super().__init__()
-    def __iter__(self):
-        pass
+#class Table(pd.DataFrame):
+#    def __init__(self,data):
+#        super().__init__()
+#    def __iter__(self):
+#        pass
 
 
 class GeteraInterface:
@@ -23,13 +23,16 @@ class GeteraInterface:
     getera_path : путь до папки с гетерой
 
     """
-    def __init__(self,getera_path:str):
+    def __init__(self,getera_path:str, input_file, output_file):
         self.getera_path = getera_path
         self.io_files = {}
+        self.set_input_file(input_file)
+        self.set_output_file(output_file)
+        
 
     def _config_writer(self,path,filetype):
         #self.input_file = path
-        file_path = self.io_files[filename] = path
+        file_path = self.io_files[filetype] = path
         with open(self.getera_path+r'CONFIG.DRV', 'r+') as f:
             config = f.read()
         inget = re.compile(f'{filetype}\:[A-zА-я.1-9]+').search(config)[0]
@@ -64,27 +67,27 @@ class GeteraInterface:
             Ищет по регулярному выражению все точки вхождения
             и записывает по ним в файл данные из переменной data
             """
-            with open(self.getera_path + self.input_file,'r') as f:
-                filee = f.read()
-            regex_input = re.compile(regexp)
+            with open(self.getera_path + self.io_files['INGET'],'r') as f:
+                parsed_file = f.read()
+            #ищем все нужные точки входа
+            entries = re.findall(regexp, parsed_file)
             k = 0
-            entries = regex_input.findall(filee)
             for i in entries:
-                start_index = filee.find(i)+len(i)
-                stop_index = filee[start_index:].find(',') + start_index
-                #print(f'start:{start_index}, stop:{stop_index}')
-                sliced_string = filee[start_index:stop_index]
-                print(sliced_string)
+                #находим нужную построку
+                start_index = parsed_file.find(i)+len(i)
+                stop_index = parsed_file[start_index:].find('\n') + start_index
+                sliced_string = parsed_file[start_index:stop_index]
+                #разбиваем на массив 
                 row = re.split(r',\s*', sliced_string)
-                print(row)
-                for j in range(len(row)-1):
+                #заменяем значения в массиве
+                for j in range(len(row) - 1):
                     row[j] = '%.03e'%data[k+j]
-                k += len(row)
-                filee = filee.replace(sliced_string, ', '.join(row))
-                print(', '.join(row))
-            print(filee)
-            #with open(self.getera_path + self.input_file,'w') as f:
-            #    f.write(filee)
+                k += len(row) - 1
+                #подставляем массив назад
+                parsed_file = parsed_file.replace(sliced_string, ', '.join(row))
+            #записываем в файл     
+            with open(self.getera_path + self.io_files['INGET'],'w') as f:
+                f.write(parsed_file)
 
         def gen_regexp(strings:str) -> str:
             """
@@ -132,17 +135,17 @@ class GeteraInterface:
         os.chdir(self.getera_path) 
         os.system('getera.exe')
         output_dict = '*grp*flux 1/cm2c  * stotal      * sabs        * sfis.       * nu$sfis.    * 1/3*strans  *1/aver.veloci*aver power\n'
-        with open(self.getera_path+self.output_file) as f:
-            file = f.read()
-        line = file.find(output_dict)+len(output_dict)    
+        with open(self.getera_path + self.io_files['OUTGET']) as f:
+            parsed_file = f.read()
+        line = parsed_file.find(output_dict)+len(output_dict)    
         j = 0
         prev = ['','']
         p = 0
         Rho = {}
         while(p < 2):
-            prev[p] += file[line+j]
+            prev[p] += parsed_file[line+j]
             j+=1
-            if(file[line+j] == '\n'):
+            if(parsed_file[line+j] == '\n'):
                 p+=1
         for k in [0,1]:
             prev[k] = prev[k].split(' ')
@@ -158,11 +161,11 @@ class GeteraInterface:
             Rho['Σfis%d'%(k+1)] = float(prev1[4+k])
             Rho['νSf%d'%(k+1)] = float(prev1[5+k])
             Rho['D%d'%(k+1)] = prev1[6+k]
-        with open(self.getera_path+self.output_file) as f:
-            file = f.read()
+        with open(self.getera_path + self.io_files['OUTGET']) as f:
+            parsed_file = f.read()
 
         xx = re.compile(r'i *1 *\d*.?\d* * *\d*.?\d*')
-        Rho['Σ1→2'] = xx.findall(file)[0].split('     ')[2]
+        Rho['Σ1→2'] = xx.findall(parsed_file)[0].split('     ')[2]
         return Rho
         
 
