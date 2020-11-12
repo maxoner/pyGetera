@@ -6,6 +6,7 @@ GETERA Python API
 import os
 import re
 import pandas as pd 
+from typing import Iterable
 
 
 #class Table(pd.DataFrame):
@@ -61,6 +62,31 @@ class GeteraInterface:
                 Если вы шарите в регулярных выражениях, можете самостоятельно задать то выражение, 
                 по которому функция ищет места, в которых следует переписать значения.
         """
+        def cut_substring(entry:str, parsed_file:str) -> str:
+            start_index = parsed_file.find(entry) + len(entry)
+            stop_index = parsed_file[start_index:].find('\n') + start_index
+            sliced_string = parsed_file[start_index:stop_index]
+            return sliced_string
+
+        def replace_string(string:str, data:Iterable, curr_index:int, separator=',' ) -> str:
+            """
+            Заменяем значения, разделенные сепаратором, в указанной строке
+            """
+            row = re.split(fr'{separator}\s*', string)
+            #заменяем значения в массиве
+            for j in range(len(row) - 1):
+                row[j] = '%.03e'%data[curr_index + j]
+            return f'{separator} '.join(row), len(row) - 1
+
+        def replace_all_entries(regexp:str, parsed_file:str) -> str:
+            entries = re.findall(regexp, parsed_file)
+            k = 0
+            for i in entries:
+                sliced_string = cut_substring(i, parsed_file)
+                replaced_string, step = replace_string(sliced_string, data, k)
+                parsed_file = parsed_file.replace(i+sliced_string, i+replaced_string)
+                k += step
+            return parsed_file
 
         def write_to_file(regexp:str) -> None:
             """
@@ -69,25 +95,11 @@ class GeteraInterface:
             """
             with open(self.getera_path + self.io_files['INGET'],'r') as f:
                 parsed_file = f.read()
-            #ищем все нужные точки входа
-            entries = re.findall(regexp, parsed_file)
-            k = 0
-            for i in entries:
-                #находим нужную построку
-                start_index = parsed_file.find(i)+len(i)
-                stop_index = parsed_file[start_index:].find('\n') + start_index
-                sliced_string = parsed_file[start_index:stop_index]
-                #разбиваем на массив 
-                row = re.split(r',\s*', sliced_string)
-                #заменяем значения в массиве
-                for j in range(len(row) - 1):
-                    row[j] = '%.03e'%data[k+j]
-                k += len(row) - 1
-                #подставляем массив назад
-                parsed_file = parsed_file.replace(sliced_string, ', '.join(row))
-            #записываем в файл     
+
+            modified_parsed_file = replace_all_entries(regexp, parsed_file)
+            
             with open(self.getera_path + self.io_files['INGET'],'w') as f:
-                f.write(parsed_file)
+                f.write(modified_parsed_file)
 
         def gen_regexp(strings:str) -> str:
             """
