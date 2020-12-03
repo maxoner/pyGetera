@@ -3,20 +3,57 @@ Author: Панин Максим
 GETERA Python API
 
 """
+import json
 import os
-import re
 import pandas as pd 
+import re
+import sys
 from typing import Iterable
 
 
-#class Table(pd.DataFrame):
-#    def __init__(self,data):
-#        super().__init__()
-#    def __iter__(self):
-#        pass
+
+# class Table: #предобработка и постобработка таблиц
+
+#     def from_table(self, table, converter reg_exp=None):
+#         for i in range(table.shape[0]):
+#             getera.input(table.loc[i])
 
 
-class GeteraInterface:
+class GeteraIO: #Запись перезапись чтение открытие exe 
+    def __init__(self,getera_path:str, input_file, output_file):
+        self.getera_path = getera_path
+        self.io_files = {"INGET": input_file, "OUTGET": output_file}
+        self._config_writer('INGET')
+        self._config_writer('OUTGET') 
+
+
+    def _config_writer(self,filetype):
+        """
+        Прописывает в конфиге имя выходного или входного файла
+        """
+        file_path = self.io_files[filetype]
+        with open(self.getera_path+'CONFIG.DRV', 'r+') as f:
+            config = f.read()
+        get = re.compile(fr'{filetype}\:[A-zА-я.1-9]+').search(config)[0]
+        config = config.replace(get , f'{filetype}:'+ file_path)
+        with open(self.getera_path+r'CONFIG.DRV', 'w') as f:
+            f.write(config)
+
+    def read(self, filetype):
+        with open(self.getera_path + self.io_files[filetype],'r') as f:
+            parsed_file = f.read()
+        return parsed_file
+
+    def write(self):
+        with open(self.getera_path + self.io_files['INGET'],'r') as f:
+            parsed_file = f.write()
+
+    def execute(self):
+        os.chdir(self.getera_path)
+        os.system('.\GeteraRun.bat')
+#-------------------------------------------------------------------------------------------- 
+      
+class GeteraInterface(GeteraIO):
     """
     Обеспечивает редактирование и ввод в гетеру соответствующих файлов.
     Аргументы при объявлении:
@@ -24,38 +61,16 @@ class GeteraInterface:
     getera_path : путь до папки с гетерой
 
     """
-    def __init__(self,getera_path:str, input_file, output_file):
-        self.getera_path = getera_path
-        self.io_files = {}
-        self.set_input_file(input_file)
-        self.set_output_file(output_file)
-        
+          
 
-    def _config_writer(self,path,filetype):
-        #self.input_file = path
-        file_path = self.io_files[filetype] = path
-        with open(self.getera_path+r'CONFIG.DRV', 'r+') as f:
-            config = f.read()
-        inget = re.compile(f'{filetype}\:[A-zА-я.1-9]+').search(config)[0]
-        config = config.replace(inget , f'{filetype}:'+ file_path)
-        with open(self.getera_path+r'CONFIG.DRV', 'w') as f:
-            f.write(config)
-        
-    def set_input_file(self,path):
-        self._config_writer(path, 'INGET' )
-
-    def set_output_file(self,path):
-        self._config_writer(path, 'OUTGET')
-
-
-    def input(self, data, strings=None, reg_exp=None):
+    def input(self, data, reg_exp=None):
         """
         Вводит данные во входной txt файл, входые параметры:
             
-            strings
-                Принимает на вход массив строк, с именами переписываемых параметров. 
+            data
+                Принимает на вход словарь, где ключи это имена переписываемых параметров. 
                 Названия элементов записывать так же как в гетере,но без собак и звездочек,
-                например ['t', 'U235','U238','Er']  
+                например {'t':293.0, 'U235':3*10**(-24),'U238':5*10**(-21),'Er':0}  
 
             reg_exp
                 Принимает на вход r-строку.
@@ -68,35 +83,35 @@ class GeteraInterface:
             sliced_string = parsed_file[start_index:stop_index]
             return sliced_string
 
-        def replace_string(string:str, data:Iterable, curr_index:int, separator=',' ) -> str:
+        def replace_string(string:str, data:Iterable, separator=',' ) -> str:
+            self.colls = len(data)
             """
             Заменяем значения, разделенные сепаратором, в указанной строке
             """
             row = re.split(fr'{separator}\s*', string)
             #заменяем значения в массиве
             for j in range(len(row) - 1):
-                row[j] = '%.03e'%data[curr_index + j]
-            return f'{separator} '.join(row), len(row) - 1
+                row[j] = '%.03e'%data[j]
+            return f'{separator} '.join(row)
 
-        def replace_all_entries(regexp:str, parsed_file:str) -> str:
-            entries = re.findall(regexp, parsed_file)
+        def replace_all_entries(regexp:str, parsed_file:str, data) -> str:
+            entries = re.findall(regexp, parsed_file)[:len(data)]
             k = 0
             for i in entries:
                 sliced_string = cut_substring(i, parsed_file)
-                replaced_string, step = replace_string(sliced_string, data, k)
+                replaced_string = replace_string(sliced_string, data[k] if type(data[k]) == list else [data[k]])
+            #Проблема::нужно вводить данные по порядку, т.к. обращение не по ключу, а по индексу 
                 parsed_file = parsed_file.replace(i+sliced_string, i+replaced_string)
-                k += step
+                k += 1
             return parsed_file
 
-        def write_to_file(regexp:str) -> None:
+        def write_to_file(regexp:str, data) -> None:
             """
             Ищет по регулярному выражению все точки вхождения
             и записывает по ним в файл данные из переменной data
             """
-            with open(self.getera_path + self.io_files['INGET'],'r') as f:
-                parsed_file = f.read()
 
-            modified_parsed_file = replace_all_entries(regexp, parsed_file)
+            modified_parsed_file = replace_all_entries(regexp, self.read('INGET'), data)
             
             with open(self.getera_path + self.io_files['INGET'],'w') as f:
                 f.write(modified_parsed_file)
@@ -108,12 +123,12 @@ class GeteraInterface:
             """
             string = ','.join(strings)
             flag = False
-            first = []
+            first = []                                  
             second = []
             for i in string:
                 if i == ',':
                     flag = False
-                elif i.isdigit():
+                elif i.isdigit(): 
                     continue
                 elif flag:
                     second.append(i)
@@ -133,57 +148,104 @@ class GeteraInterface:
         
         os.chdir(self.getera_path)
         if reg_exp:
-            write_to_file(reg_exp)
+            write_to_file(reg_exp, list(data.values()))
         else:
-            write_to_file(gen_regexp(strings))
+            write_to_file(gen_regexp(data.keys()), list(data.values()))
 
 
     def output(self):
-        """
-        Запускает файл getera.exe и вытаскивает нужные параметры из out файла.
-        """
-            
+        coefficients = {'keff', 'nu','mu','fi','teta'}
+        macroparams = {'stotal', 'sabs', 'sfis','flux','nu$sfis', '1/3strans'}
+        output_dict = {}
         #Запускаем гетеру
-        os.chdir(self.getera_path) 
-        os.system('getera.exe')
-        output_dict = '*grp*flux 1/cm2c  * stotal      * sabs        * sfis.       * nu$sfis.    * 1/3*strans  *1/aver.veloci*aver power\n'
-        with open(self.getera_path + self.io_files['OUTGET']) as f:
+        self.execute()
+        with open(self.getera_path + self.io_files['OUTGET'], 'r') as f:
             parsed_file = f.read()
-        line = parsed_file.find(output_dict)+len(output_dict)    
-        j = 0
-        prev = ['','']
-        p = 0
-        Rho = {}
-        while(p < 2):
-            prev[p] += parsed_file[line+j]
-            j+=1
-            if(parsed_file[line+j] == '\n'):
-                p+=1
-        for k in [0,1]:
-            prev[k] = prev[k].split(' ')
-            prev1=[]
-            j = 0
-            for j in prev[k]:
-                if (j == '' or j ==' ' or j=='   ' ):
-                    continue
-                else:
-                    prev1.append(j)
-            Rho['Σtot%d'%(k+1)] = float(prev1[2+k])
-            Rho['Σabs%d'%(k+1)] = float(prev1[3+k])
-            Rho['Σfis%d'%(k+1)] = float(prev1[4+k])
-            Rho['νSf%d'%(k+1)] = float(prev1[5+k])
-            Rho['D%d'%(k+1)] = prev1[6+k]
-        with open(self.getera_path + self.io_files['OUTGET']) as f:
-            parsed_file = f.read()
+        def find_entries(type_arg):
+            output_dict1 = {}
+            if type_arg == 'coeff':
+                stringg = '    keff         nu           mu           fi           teta\n'
+                line = parsed_file.find(stringg)+len(stringg)    
+                j = 0
+                prev = ''
+                while(parsed_file[line+j] != '\n'):
+                    prev += parsed_file[line+j]
+                    j+=1
+                prev = prev.split(' ')
+                prev1=[]
+                j = 0
+                for j in prev:
+                    if (j == '' or j ==' ' or j=='   ' ):
+                        continue
+                    else:
+                        prev1.append(j)
+                output_dict1['keff']= float(prev1[0])
+                output_dict1['nu'] = float(prev1[1])
+                output_dict1['mu'] = float(prev1[2])
+                output_dict1['fi'] = float(prev1[3])
+                output_dict1['teta'] = float(prev1[4])
 
-        xx = re.compile(r'i *1 *\d*.?\d* * *\d*.?\d*')
-        Rho['Σ1→2'] = xx.findall(parsed_file)[0].split('     ')[2]
-        return Rho
-        
+            elif type_arg == 'macro':
+                stringg = '*grp*flux 1/cm2c  * stotal      * sabs        * sfis.       * nu$sfis.    * 1/3*strans  *1/aver.veloci*aver power\n'
+                for entry in (lambda test_str, test_sub:[i for i in range(len(test_str)) if test_str.startswith(test_sub, i)])(parsed_file,stringg):
+                    line = entry+len(stringg)    
+                    j = 0
+                    prev = ['','']
+                    p = 0
+                    while(p < 2):
+                        prev[p] += parsed_file[line+j]
+                        j+=1
+                        if(parsed_file[line+j] == '\n') #не работает парсинг
+                            p+=1
+                # for k in range(len((lambda test_str, test_sub:[i for i in range(len(test_str)) if test_str.startswith(test_sub, i)])(parsed_file,stringg))):
+                    for k in range(self.colls - 1):
+                        prev[k] = prev[k].split(' ')
+                        prev1=[]
+                        j = 0
+                        for j in prev[k]:
+                            if (j == '' or j ==' ' or j=='   ' ):
+                                continue
+                            else:
+                                prev1.append(j)
+                        output_dict1['Σtot%d'%(k+1)] = float(prev1[2+k]) #  ⎫
+                        output_dict1['Σabs%d'%(k+1)] = float(prev1[3+k]) #  ⎪ Заполнение таблицы
+                        output_dict1['Σfis%d'%(k+1)] = float(prev1[4+k]) #  ⎬ коэффициентами 
+                        output_dict1['νSf%d'%(k+1)] = float(prev1[5+k])  #  ⎪
+                        output_dict1['D%d'%(k+1)] = prev1[6+k]           #  ⎭
+                return output_dict1
+        # xx = re.compile(r'i *1 *\d*.?\d* * *\d*.?\d*')              # ⎫
+        # Rho['Σ1→2'] = xx.findall(parsed_file)[0].split('     ')[2]
+        output_dict.update(find_entries('coeff'))
+        output_dict.update(find_entries('macro'))
+        return output_dict
+class GeteraUnit:
+    def __init__():
+        pass
 
-def main():
+    def find(self) -> dict:
+        """
+        Ищет все места вхождения
+        """
+        pass
+# 
+class InGet(GeteraUnit):
+    def replace(self):
+        pass
+
+class OutGet(GeteraUnit):
+    def parse(self):
+        pass
+
+class IsotopeIn(InGet):
+    pass
+
+class IsotopesOut(OutGet):
+    pass
+
+
+def cli():
     pass
 
 
 if __name__ == '__main__':
-    main()
+    cli()
