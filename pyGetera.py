@@ -3,34 +3,38 @@ Author: Панин Максим
 GETERA Python API
 
 """
-import json
+# import json
 import os
 import pandas as pd 
 import re
-import sys
 from typing import Iterable
 
+#----=====Regular-expressions=====----
+rcin_keyword    = re.compile(r'rcin\(\d\)=\d.?\d?')
+by_space        = re.compile(r'\s+')
+is_parse_method = re.compile(r'parse_.*')
 
+#----=====Raw-keyword-strings=====----
+macro_string = '*grp*flux 1/cm2c  * stotal      * sabs        * sfis.       * nu$sfis.    * 1/3*strans  *1/aver.veloci*aver power\n'
+coeff_string = '    keff         nu           mu           fi           teta\n' 
 
-# class Table: #предобработка и постобработка таблиц
-
-#     def from_table(self, table, converter reg_exp=None):
-#         for i in range(table.shape[0]):
-#             getera.input(table.loc[i])
-
-
+#-------------------------------------
 class GeteraIO: #Запись перезапись чтение открытие exe 
+    """
+    Инкапсулирует работу с файлами и программой: чтение, запись, выполнение exe, 
+    а также запись в конфиг имени входного и выходного файлов
+    """
     def __init__(self,getera_path:str, input_file, output_file):
         self.getera_path = getera_path
         self.io_files = {"INGET": input_file, "OUTGET": output_file}
-        self._config_writer('INGET')
-        self._config_writer('OUTGET') 
+        self.write_to_config('INGET')
+        self.write_to_config('OUTGET') 
 
-
-    def _config_writer(self,filetype):
+    def write_to_config(self,filetype):
         """
         Прописывает в конфиге имя выходного или входного файла
         """
+        os.chdir(self.getera_path)
         file_path = self.io_files[filetype]
         with open(self.getera_path+'CONFIG.DRV', 'r+') as f:
             config = f.read()
@@ -40,19 +44,133 @@ class GeteraIO: #Запись перезапись чтение открытие
             f.write(config)
 
     def read(self, filetype):
+        os.chdir(self.getera_path)
         with open(self.getera_path + self.io_files[filetype],'r') as f:
             parsed_file = f.read()
         return parsed_file
 
-    def write(self):
-        with open(self.getera_path + self.io_files['INGET'],'r') as f:
-            parsed_file = f.write()
+    def write(self, file):
+        os.chdir(self.getera_path)
+        with open(self.getera_path + self.io_files['INGET'],'w') as f:
+            f.write(file)
 
     def execute(self):
         os.chdir(self.getera_path)
-        os.system('.\GeteraRun.bat')
-#-------------------------------------------------------------------------------------------- 
+        os.system(r'.\GeteraRun.bat')
       
+
+class StringProcessor:
+    """
+    Задает методы для поиска и замены в подстроке
+    """
+
+    @staticmethod
+    def cut_substring(entry:str, parsed_file:str, below=0) -> str:
+        start_index = parsed_file.find(entry) + len(entry)
+        arr = []
+        for _ in range(below+1):
+            stop_index = parsed_file[start_index:].find('\n') + start_index
+            sliced_string = parsed_file[start_index:stop_index]
+            start_index = stop_index
+            arr.append(sliced_string)
+        return arr if below != 0 else sliced_string
+
+    @staticmethod
+    def replace_string(string:str, data:Iterable, separator=',' ) -> str:
+        """
+        Заменяем значения, разделенные сепаратором, в указанной строке
+        """
+        row = re.split(fr'{separator}\s*', string)
+        #заменяем значения в массиве
+        for j in range(len(row) - 1):
+            if rcin_keyword.match(row[j]): #проверяем на ключевое слово внутреннего радиуса
+                row[j] = data[j]
+            row[j] = '%.03e'%data[j]
+        return f'{separator} '.join(row)
+
+    @staticmethod
+    def replace_all_entries(regexp:str, parsed_file:str, data) -> str:
+        entries = re.findall(regexp, parsed_file)[:len(data)]
+        k = 0
+        for i in entries:
+            sliced_string = StringProcessor.cut_substring(i, parsed_file)
+            replaced_string = StringProcessor.replace_string(sliced_string, data[k] if type(data[k]) == list else [data[k]])
+            #Проблема::нужно вводить данные по порядку, т.к. обращение не по ключу, а по индексу 
+            parsed_file = parsed_file.replace(i+sliced_string, i+replaced_string)
+            k += 1
+        return parsed_file
+
+
+class Parser:
+    def __init__(self, file_iterator):
+        self.file_iterator = file_iterator
+        self.dict_of_started = {}
+        self._start_generators()
+
+    def _start_generators(self):
+        for i in dir(Parser):
+            if is_parse_method.match(i):
+                self.dict_of_started[i] = getattr(Parser, i)(self)
+
+    def parse_coefs(self):
+        while True:
+            line = next(self.file_iterator)
+            raw_cffs = by_space.split(line)[1:-1]
+            parsed_coeffs = {
+                'keff':float(raw_cffs[0]),
+                'nu':float(raw_cffs[1]),
+                'mu':float(raw_cffs[2]),
+                'fi':float(raw_cffs[3]),
+                'teta':float(raw_cffs[4])
+            } 
+            yield parsed_coeffs
+
+    def parse_macro(self):
+        curr_zone = 1
+        while True:
+            parsed_coeffs = {}
+            while True:
+                line = next(self.file_iterator)
+                raw_cffs = by_space.split(line)[1:-1]
+                try:
+                    gr_num = int(raw_cffs[0])
+                except BaseException:
+                    break
+                parsed_coeffs.update({
+                        f'{curr_zone}::flux{gr_num}'       : float(raw_cffs[1]),
+                        f'{curr_zone}::stotal{gr_num}'     : float(raw_cffs[2]),
+                        f'{curr_zone}::sabs{gr_num}'       : float(raw_cffs[3]),
+                        f'{curr_zone}::sfis{gr_num}'       : float(raw_cffs[4]),
+                        f'{curr_zone}::nusfis{gr_num}'     : float(raw_cffs[5]),
+                        f'{curr_zone}::1/3*strans{gr_num}' : float(raw_cffs[6]),
+                        f'{curr_zone}::1/vel*power{gr_num}': float(raw_cffs[7])
+                })
+
+            curr_zone += 1
+            yield parsed_coeffs
+
+    # def parse_isotopes(self, file_iterator, coeff_dict):
+        # yield 0
+class DataPostProcessor:
+    @staticmethod
+    def make_dataframe(data:dict, columns=None) -> pd.DataFrame:
+        """
+        создает pandas.DataFrame из словаря
+        """
+        result = pd.Series(data).to_frame().T
+        if columns:
+            table = pd.concat((result[i] for i in columns), axis=1)
+            return table 
+        else:
+            return result
+
+    @staticmethod
+    def texify(data:dict, ignore_columns=None):
+        pass
+
+    # def make_xls(data:dict):
+        # pass
+
 class GeteraInterface(GeteraIO):
     """
     Обеспечивает редактирование и ввод в гетеру соответствующих файлов.
@@ -61,7 +179,6 @@ class GeteraInterface(GeteraIO):
     getera_path : путь до папки с гетерой
 
     """
-          
 
     def input(self, data, reg_exp=None):
         """
@@ -77,44 +194,6 @@ class GeteraInterface(GeteraIO):
                 Если вы шарите в регулярных выражениях, можете самостоятельно задать то выражение, 
                 по которому функция ищет места, в которых следует переписать значения.
         """
-        def cut_substring(entry:str, parsed_file:str) -> str:
-            start_index = parsed_file.find(entry) + len(entry)
-            stop_index = parsed_file[start_index:].find('\n') + start_index
-            sliced_string = parsed_file[start_index:stop_index]
-            return sliced_string
-
-        def replace_string(string:str, data:Iterable, separator=',' ) -> str:
-            self.colls = len(data)
-            """
-            Заменяем значения, разделенные сепаратором, в указанной строке
-            """
-            row = re.split(fr'{separator}\s*', string)
-            #заменяем значения в массиве
-            for j in range(len(row) - 1):
-                row[j] = '%.03e'%data[j]
-            return f'{separator} '.join(row)
-
-        def replace_all_entries(regexp:str, parsed_file:str, data) -> str:
-            entries = re.findall(regexp, parsed_file)[:len(data)]
-            k = 0
-            for i in entries:
-                sliced_string = cut_substring(i, parsed_file)
-                replaced_string = replace_string(sliced_string, data[k] if type(data[k]) == list else [data[k]])
-            #Проблема::нужно вводить данные по порядку, т.к. обращение не по ключу, а по индексу 
-                parsed_file = parsed_file.replace(i+sliced_string, i+replaced_string)
-                k += 1
-            return parsed_file
-
-        def write_to_file(regexp:str, data) -> None:
-            """
-            Ищет по регулярному выражению все точки вхождения
-            и записывает по ним в файл данные из переменной data
-            """
-
-            modified_parsed_file = replace_all_entries(regexp, self.read('INGET'), data)
-            
-            with open(self.getera_path + self.io_files['INGET'],'w') as f:
-                f.write(modified_parsed_file)
 
         def gen_regexp(strings:str) -> str:
             """
@@ -137,7 +216,7 @@ class GeteraInterface(GeteraIO):
                     first.append(i) 
                     flag = True
             ll = ''
-            reg_exp = f' *[@ ] *\*?[{ ll.join(first) }][{ ll.join(second) }]?\d*\*? *[@=] *\s*' 
+            reg_exp = fr' *[@ ] *\*?[{ ll.join(first) }][{ ll.join(second) }]?\d*\*? *[@=] *\s*' 
             if len(second) == 0:
                 reg_exp = reg_exp.replace('[]?','')
             #tail = '\D{1,4}\(?\d?\D?\d?\)?\*? *[@=] *'
@@ -146,102 +225,40 @@ class GeteraInterface(GeteraIO):
             #reg_exp
             return reg_exp
         
-        os.chdir(self.getera_path)
-        if reg_exp:
-            write_to_file(reg_exp, list(data.values()))
-        else:
-            write_to_file(gen_regexp(data.keys()), list(data.values()))
+        modified_parsed_file = StringProcessor.replace_all_entries(
+            reg_exp if reg_exp else gen_regexp(data.keys()),
+            self.read('INGET'),
+            list(data.values()))
+        self.write(modified_parsed_file)
 
+    def output(self, table_view=False, format=None, columns=None):        
 
-    def output(self):
-        coefficients = {'keff', 'nu','mu','fi','teta'}
-        macroparams = {'stotal', 'sabs', 'sfis','flux','nu$sfis', '1/3strans'}
-        output_dict = {}
-        #Запускаем гетеру
+        #---====Main-Loop====---
         self.execute()
-        with open(self.getera_path + self.io_files['OUTGET'], 'r') as f:
-            parsed_file = f.read()
-        def find_entries(type_arg):
-            output_dict1 = {}
-            if type_arg == 'coeff':
-                stringg = '    keff         nu           mu           fi           teta\n'
-                line = parsed_file.find(stringg)+len(stringg)    
-                j = 0
-                prev = ''
-                while(parsed_file[line+j] != '\n'):
-                    prev += parsed_file[line+j]
-                    j+=1
-                prev = prev.split(' ')
-                prev1=[]
-                j = 0
-                for j in prev:
-                    if (j == '' or j ==' ' or j=='   ' ):
+        with open(self.getera_path + self.io_files['OUTGET'],'r') as f:
+            parsed_data = {}  
+            fileIter = f.__iter__()
+            parser = Parser(fileIter)
+            cases = {
+                macro_string : parser.dict_of_started['parse_macro'],
+                coeff_string : parser.dict_of_started['parse_coefs']
+            }
+            while True:
+                try:
+                    curr_line = next(fileIter)
+                    try: 
+                        parser_response = next(cases[curr_line])
+                        parsed_data.update(parser_response)
+                    except KeyError:
                         continue
-                    else:
-                        prev1.append(j)
-                output_dict1['keff']= float(prev1[0])
-                output_dict1['nu'] = float(prev1[1])
-                output_dict1['mu'] = float(prev1[2])
-                output_dict1['fi'] = float(prev1[3])
-                output_dict1['teta'] = float(prev1[4])
-
-            elif type_arg == 'macro':
-                stringg = '*grp*flux 1/cm2c  * stotal      * sabs        * sfis.       * nu$sfis.    * 1/3*strans  *1/aver.veloci*aver power\n'
-                for entry in (lambda test_str, test_sub:[i for i in range(len(test_str)) if test_str.startswith(test_sub, i)])(parsed_file,stringg):
-                    line = entry+len(stringg)    
-                    j = 0
-                    prev = ['','']
-                    p = 0
-                    while(p < 2):
-                        prev[p] += parsed_file[line+j]
-                        j+=1
-                        if(parsed_file[line+j] == '\n') #не работает парсинг
-                            p+=1
-                # for k in range(len((lambda test_str, test_sub:[i for i in range(len(test_str)) if test_str.startswith(test_sub, i)])(parsed_file,stringg))):
-                    for k in range(self.colls - 1):
-                        prev[k] = prev[k].split(' ')
-                        prev1=[]
-                        j = 0
-                        for j in prev[k]:
-                            if (j == '' or j ==' ' or j=='   ' ):
-                                continue
-                            else:
-                                prev1.append(j)
-                        output_dict1['Σtot%d'%(k+1)] = float(prev1[2+k]) #  ⎫
-                        output_dict1['Σabs%d'%(k+1)] = float(prev1[3+k]) #  ⎪ Заполнение таблицы
-                        output_dict1['Σfis%d'%(k+1)] = float(prev1[4+k]) #  ⎬ коэффициентами 
-                        output_dict1['νSf%d'%(k+1)] = float(prev1[5+k])  #  ⎪
-                        output_dict1['D%d'%(k+1)] = prev1[6+k]           #  ⎭
-                return output_dict1
-        # xx = re.compile(r'i *1 *\d*.?\d* * *\d*.?\d*')              # ⎫
-        # Rho['Σ1→2'] = xx.findall(parsed_file)[0].split('     ')[2]
-        output_dict.update(find_entries('coeff'))
-        output_dict.update(find_entries('macro'))
-        return output_dict
-class GeteraUnit:
-    def __init__():
-        pass
-
-    def find(self) -> dict:
-        """
-        Ищет все места вхождения
-        """
-        pass
-# 
-class InGet(GeteraUnit):
-    def replace(self):
-        pass
-
-class OutGet(GeteraUnit):
-    def parse(self):
-        pass
-
-class IsotopeIn(InGet):
-    pass
-
-class IsotopesOut(OutGet):
-    pass
-
+                except StopIteration:
+                    break
+                
+        if format == 'pandas':
+            table = DataPostProcessor.make_dataframe(parsed_data, columns)
+            return table 
+        else:
+            return parsed_data
 
 def cli():
     pass
