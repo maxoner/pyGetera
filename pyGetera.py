@@ -105,12 +105,8 @@ class Parser:
     def __init__(self, file_iterator):
         self.file_iterator = file_iterator
         self.dict_of_started = {}
-        self._start_generators()
+        # self._start_generators()
 
-    def _start_generators(self):
-        for i in dir(Parser):
-            if is_parse_method.match(i):
-                self.dict_of_started[i] = getattr(Parser, i)(self)
 
     def parse_coefs(self):
         while True:
@@ -240,8 +236,8 @@ class GeteraInterface(GeteraIO):
             fileIter = f.__iter__()
             parser = Parser(fileIter)
             cases = {
-                macro_string : parser.dict_of_started['parse_macro'],
-                coeff_string : parser.dict_of_started['parse_coefs']
+                macro_string : parser.parse_macro(), #а почему бы просто не запустить их в словаре? 🤔 
+                coeff_string : parser.parse_coefs()
             }
             while True:
                 try:
