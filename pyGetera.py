@@ -4,11 +4,11 @@ GETERA Python API
 
 """
 import os
-import pandas as pd 
+import pandas as pd
 import re
 from typing import Iterable
 
-#----=====Regular-expressions=====----
+# ----=====Regular-expressions=====----
 rcin_keyword = re.compile(r'rcin\(\d\)=\d.?\d?')
 by_space = re.compile(r'\s+')
 burn = re.compile(r'\s*\*\*\* average burn up =\s*\d+\.\d+\s*.*')
